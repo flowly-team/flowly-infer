@@ -21,4 +21,7 @@ pub enum Error {
 
     #[error("no predefined execution contexts")]
     NoExecutionContext,
+
+    #[error("other error: {0}")]
+    Other(Box<dyn std::error::Error + Sync + Send + 'static>),
 }
