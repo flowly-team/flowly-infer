@@ -32,7 +32,9 @@ impl<T> Stream for ExecutionTask<T> {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum InterpolationKind {
     #[default]
     Float32,
@@ -40,7 +42,9 @@ pub enum InterpolationKind {
     Int8,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum QuantizationKind {
     #[default]
     Float32,

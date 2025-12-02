@@ -146,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
 
         let img = original_img_f32.clone();
 
-        ppl.infer(
+        ppl.infer_stream(
             futures::stream::repeat_with(move || {
                 let index = counter;
                 counter += 1;

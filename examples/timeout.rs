@@ -3,12 +3,12 @@
 use std::time::Duration;
 
 use async_cuda::Device;
-use futures::StreamExt;
-use nvinfer::{
+use flowly_infer::{
     Engine, QuantizationKind,
     model::{diffiqa::DiffIQAModel, yolo::YoloModel},
-    nvinfer::nvinfer,
+    nvinfer::{self, nvinfer},
 };
+use futures::StreamExt;
 
 #[derive(Clone)]
 pub struct Input<T> {
@@ -32,11 +32,8 @@ async fn main() -> anyhow::Result<()> {
     let count = 10;
     let streams = 1;
 
-    let original_img = image::open("./output.jpg")?;
-    // let original_img_u8 = original_img.to_rgb8();
+    let original_img = image::open("./assets/output.jpg")?;
     let original_img_f32 = original_img.to_rgb32f();
-
-    // let (img_width, img_height) = (original_img.width(), original_img.height());
 
     let mem_info = Device::memory_info().await?;
     println!("{:?}", mem_info);
@@ -49,15 +46,16 @@ async fn main() -> anyhow::Result<()> {
         4,
         640,
         480,
-        "./model.onnx",
+        "./assets/model.onnx",
     );
 
-    let scorer = DiffIQAModel::new(8, QuantizationKind::Float32, "./diffiqa.onnx");
-    let config = nvinfer::nvinfer::Config {
+    let scorer = DiffIQAModel::new(8, QuantizationKind::Float32, "./assests/diffiqa.onnx");
+    let config = nvinfer::Config {
         max_streams: streams,
         cache_dir: "./trt_cache".into(),
         quant_kind: QuantizationKind::Float32,
         timeout: 1.0,
+        queue_size: 8,
     };
 
     let ppl = (
@@ -71,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
 
         let img = original_img_f32.clone();
 
-        ppl.infer(async_stream::stream! {
+        ppl.infer_stream(async_stream::stream! {
             for index in 0..count {
                 yield Ok(Input {
                     stream: stream_counter,
