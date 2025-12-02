@@ -1,0 +1,26 @@
+[package]
+name = "flowly-infer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+async-cuda = { version = "0.6.1", git = "https://github.com/andreytkachenko/async-cuda.git", features = ["ndarray"] }
+async-stream = "0.3.6"
+async-tensorrt = { version = "0.9.1", git = "https://github.com/andreytkachenko/async-tensorrt.git" }
+env_logger = "0.11.8"
+futures = "0.3.31"
+image = { version = "0.25.9", features = ["rayon"] }
+imageproc = { version = "0.25.0", features = ["rayon"] }
+itertools = "0.14.0"
+log = "0.4.28"
+nalgebra = { version = "0.34.1", features = ["rayon"] }
+ndarray = { version = "0.16.1", features = ["rayon"] }
+num = "0.4.3"
+pin-project-lite = "0.2.16"
+smallvec = "1.15.1"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.53", features = ["derive"] }
