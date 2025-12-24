@@ -1,4 +1,4 @@
-use std::{ops::Div, ops::Mul, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use async_cuda::HostBuffer;
 use image::{
@@ -6,7 +6,8 @@ use image::{
     imageops::{self, FilterType},
 };
 use itertools::Itertools;
-use ndarray::{Array2, ArrayView2, ArrayView3, Axis, s};
+use nalgebra::Point2;
+use ndarray::{Array2, Array3, Axis};
 use num::{Num, ToPrimitive};
 
 const INPUT_NAME: &str = "input";
@@ -14,7 +15,10 @@ const OUTPUT_NAME_BBOXES: &str = "bboxes";
 const OUTPUT_NAME_PROBS: &str = "probs";
 const OUTPUT_NAME_LANDMARKS: &str = "landmarks";
 
-const STRIDES: [usize; 3] = [8, 16, 32];
+const PRIORS: [[u32; 2]; 3] = [[16, 32], [64, 128], [256, 512]];
+const STRIDES: [u32; 3] = [8, 16, 32];
+const SCALES: [[f32; 2]; 3] = [[2.0, 1.0], [8.0, 4.0], [32.0, 16.0]];
+const VARS: [f32; 2] = [0.1, 0.2];
 const ANCHORS_FPN: [[[f32; 4]; 2]; 3] = [
     [
         [-248.0f32, -248.0, 263.0, 263.0],
@@ -288,9 +292,10 @@ pub struct RetinaFaceDetection<I> {
 
 impl<I> AsVal<Projection> for RetinaFaceDetection<I> {
     fn as_val(&self) -> Projection {
-        Projection {
-            m: umeyama(&self.landmarks, &ARCFACE_DST),
-        }
+        todo!()
+        // Projection {
+        //     m: umeyama(&self.landmarks, &ARCFACE_DST),
+        // }
     }
 }
 
@@ -380,8 +385,10 @@ impl<I: AsRef<image::Rgb32FImage> + Send + Sync> Model<I> for RetinafaceModel {
                 if let Some(pixel) = img.get_pixel_checked(out_row as _, out_col as _) {
                     input_1[[index, 0, out_col as usize, out_row as usize]] =
                         (pixel.0[0] - 0.5) * 2.0;
+
                     input_1[[index, 1, out_col as usize, out_row as usize]] =
                         (pixel.0[1] - 0.5) * 2.0;
+
                     input_1[[index, 2, out_col as usize, out_row as usize]] =
                         (pixel.0[2] - 0.5) * 2.0;
                 }
@@ -426,346 +433,107 @@ impl<I: AsRef<image::Rgb32FImage> + Send + Sync> Model<I> for RetinafaceModel {
         let _input = Arc::new(input);
         // let mut faces = Vec::new();
 
-        let locations = outputs
-            .view(OUTPUT_NAME_BBOXES, self.outputs_info.bboxes.shape)
-            .index_axis_move(Axis(0), index);
-
         let confidences = outputs
             .view(OUTPUT_NAME_PROBS, self.outputs_info.probs.shape)
+            .index_axis_move(Axis(0), index);
+
+        let locations = outputs
+            .view(OUTPUT_NAME_BBOXES, self.outputs_info.bboxes.shape)
             .index_axis_move(Axis(0), index);
 
         let landmarks = outputs
             .view(OUTPUT_NAME_LANDMARKS, self.outputs_info.landmarks.shape)
             .index_axis_move(Axis(0), index);
 
-        // println!("output0: {:#?}", locations.shape());
-        // println!("output1: {:#?}", confidences.shape());
-        // println!("output2: {:#?}", landmarks.shape());
-
-        let _res = infer(
-            landmarks.insert_axis(Axis(0)),
-            confidences.insert_axis(Axis(0)),
-            locations.insert_axis(Axis(0)),
-            [orig_width as usize, orig_height as usize],
-        )
-        .unwrap();
-
-        // println!("{:#?}", res);
-
-        // println!("{:#?}", outputs);
-        // let nms_threshold = 0.4;
-        // let decay4 = 0.5;
-        // let _feat_stride_fpn = [32, 16, 8];
-
-        // let _num_anchors = [2, 2, 2];
-
-        // // ---------------------------
-
-        // let proposals_list = vec![];
-        // let scores_list = vec![];
-        // let landmarks_list = vec![];
-
-        // // im_tensor, im_info, im_scale = preprocess.preprocess_image(img, allow_upscaling)
-        // // net_out = model(im_tensor)
-        // // net_out = [elt.numpy() for elt in net_out]
-
-        // let mut sym_idx = 0;
-        // for idx in 0..3usize {
-        //     // _key = f"stride{s}"
-        //     //
-        //     let scores = net_out[sym_idx];
-        //     let scores = scores[:, :, :, _num_anchors[idx] :]
-
-        //     let bbox_deltas = net_out[sym_idx + 1];
-        //     let (height, width) = (bbox_deltas.shape[1], bbox_deltas.shape[2]);
-
-        //     A = _num_anchors[f"stride{s}"]
-        //     K = height * width
-        //     anchors_fpn = _anchors_fpn[f"stride{s}"]
-        //     anchors = postprocess.anchors_plane(height, width, s, anchors_fpn)
-        //     anchors = anchors.reshape((K * A, 4))
-        //     scores = scores.reshape((-1, 1))
-
-        //     bbox_stds = [1.0, 1.0, 1.0, 1.0]
-        //     bbox_pred_len = bbox_deltas.shape[3] // A
-        //     bbox_deltas = bbox_deltas.reshape((-1, bbox_pred_len))
-        //     bbox_deltas[:, 0::4] = bbox_deltas[:, 0::4] * bbox_stds[0]
-        //     bbox_deltas[:, 1::4] = bbox_deltas[:, 1::4] * bbox_stds[1]
-        //     bbox_deltas[:, 2::4] = bbox_deltas[:, 2::4] * bbox_stds[2]
-        //     bbox_deltas[:, 3::4] = bbox_deltas[:, 3::4] * bbox_stds[3]
-        //     proposals = postprocess.bbox_pred(anchors, bbox_deltas)
-
-        //     proposals = postprocess.clip_boxes(proposals, im_info[:2])
-
-        //     if s == 4 and decay4 < 1.0:
-        //         scores *= decay4
-
-        //     scores_ravel = scores.ravel()
-        //     order = np.where(scores_ravel >= threshold)[0]
-        //     proposals = proposals[order, :]
-        //     scores = scores[order]
-
-        //     proposals[:, 0:4] /= im_scale
-        //     proposals_list.append(proposals)
-        //     scores_list.append(scores)
-
-        //     landmark_deltas = net_out[sym_idx + 2]
-        //     landmark_pred_len = landmark_deltas.shape[3] // A
-        //     landmark_deltas = landmark_deltas.reshape((-1, 5, landmark_pred_len // 5))
-        //     landmarks = postprocess.landmark_pred(anchors, landmark_deltas)
-        //     landmarks = landmarks[order, :]
-
-        //     landmarks[:, :, 0:2] /= im_scale;
-        //     landmarks_list.append(landmarks);
-
-        //     sym_idx += 3;
-        // }
-
-        // proposals = np.vstack(proposals_list);
-
-        // if proposals.shape[0] == 0 {
-        //     return resp;
-        // }
-
-        // scores = np.vstack(scores_list);
-        // scores_ravel = scores.ravel();
-        // order = scores_ravel.argsort()[::-1];
-
-        // proposals = proposals[order, :];
-        // scores = scores[order];
-        // landmarks = np.vstack(landmarks_list);
-        // landmarks = landmarks[order].astype(np.float32, copy=False);
-
-        // pre_det = np.hstack((proposals[:, 0:4], scores)).astype(np.float32, copy=False);
-
-        // // nms = cpu_nms_wrapper(nms_threshold)
-        // // keep = nms(pre_det)
-
-        // keep = postprocess.cpu_nms(pre_det, nms_threshold);
-
-        // det = np.hstack((pre_det, proposals[:, 4:]));
-        // det = det[keep, :];
-        // landmarks = landmarks[keep];
-
-        // // for idx, face in enumerate(det) {
-        // //     label = "face_" + str(idx + 1)
-        // //     resp[label] = {}
-        // //     resp[label]["score"] = face[4]
-
-        // //     resp[label]["facial_area"] = list(face[0:4].astype(int))
-
-        // //     resp[label]["landmarks"] = {}
-        // //     resp[label]["landmarks"]["right_eye"] = list(landmarks[idx][0])
-        // //     resp[label]["landmarks"]["left_eye"] = list(landmarks[idx][1])
-        // //     resp[label]["landmarks"]["nose"] = list(landmarks[idx][2])
-        // //     resp[label]["landmarks"]["mouth_right"] = list(landmarks[idx][3])
-        // //     resp[label]["landmarks"]["mouth_left"] = list(landmarks[idx][4])
-        // // }
+        println!("confidences: {:?}", confidences.shape());
+        println!("locations: {:?}", locations.shape());
+        println!("landmarks: {:?}", landmarks.shape());
 
         futures::stream::iter([])
     }
 }
 
-fn prior_box<const N: usize>(
-    min_sizes: [[usize; 2]; N],
-    steps: [usize; N],
-    clip: bool,
-    image_size: [usize; 2],
-) -> (ndarray::Array2<f32>, usize) {
-    let feature_maps = steps.map(|step| {
-        [
-            f32::ceil(image_size[0] as f32 / step as f32) as i32,
-            f32::ceil(image_size[1] as f32 / step as f32) as i32,
-        ]
-    });
+// pub fn infer(
+//     landmarks: ArrayView3<f32>,
+//     confidences: ArrayView3<f32>,
+//     locations: ArrayView3<f32>,
+//     image_size: [usize; 2],
+// ) -> Result<Vec<(f32, [f32; 4], [(f32, f32); 5])>, Error> {
+//     let confidence_threshold = 0.27016;
+//     let nms_threshold = 0.2;
+//     let variance = [0.1, 0.2];
 
-    let mut anchors: Vec<[f32; 4]> = vec![];
-    for (k, f) in feature_maps.iter().enumerate() {
-        for (i, j) in Itertools::cartesian_product(0..f[0], 0..f[1]) {
-            for min_size in min_sizes[k] {
-                anchors.push([
-                    (i as f32 + 0.5) * steps[k] as f32 / image_size[1] as f32,
-                    (j as f32 + 0.5) * steps[k] as f32 / image_size[0] as f32,
-                    min_size as f32 / image_size[0] as f32,
-                    min_size as f32 / image_size[1] as f32,
-                ]);
-            }
-        }
-    }
+//     let transformed_size = ndarray::Array::from_iter(image_size).into_owned();
 
-    let mut output = ndarray::arr2(&anchors);
-    if clip {
-        output = output.mapv(|x| x.clamp(0.0, 1.0));
-    }
+//     let (prior_box, _) = prior_box(
+//         ,
+//         STRIDES,
+//         false,
+//         [image_size[0], image_size[1]],
+//     );
 
-    (output, anchors.len())
-}
+//     let scale_landmarks = ndarray::concatenate(Axis(0), &[transformed_size.view(); 5])
+//         .unwrap()
+//         .mapv(|x| x as f32);
 
-fn decode(loc: ArrayView2<f32>, priors: ArrayView2<f32>, variances: [f32; 2]) -> Array2<f32> {
-    // let width = boxes.map_axis(Axis(0), |x| x[2] - x[0] + 1.0);
-    // let height = boxes.map_axis(Axis(0), |x| x[3] - x[1] + 1.0);
-    // let ctr_x = boxes.map_axis(Axis(0), |x| x[0] + 1.0);
-    // let ctr_y = boxes.map_axis(Axis(0), |x| x[3] - x[1] + 1.0);
+//     let scale_bboxes = ndarray::concatenate(Axis(0), &[transformed_size.view(); 2])
+//         .unwrap()
+//         .mapv(|x| x as f32);
 
-    // let widths = boxes.slice(s![.., 2]) - boxes.slice(s![.., 0]) + 1.0;
-    // let heights = boxes.slice(s![.., 3]) - boxes.slice(s![.., 1]) + 1.0;
+//     let confidence_exp = confidences.map(|v| v.exp());
+//     let confidences = &confidence_exp / confidence_exp.sum_axis(Axis(2)).insert_axis(Axis(2));
 
-    // ctr_x = boxes.slice(s![:, 0]) + 0.5 * (widths - 1.0)
-    // ctr_y = boxes.slice(s![:, 1]) + 0.5 * (heights - 1.0)
+//     let mut boxes = decode(locations.slice(s![0, .., ..]), prior_box.view(), variance);
 
-    // dx = box_deltas.slice(s![:, 0:1])
-    // dy = box_deltas.slice(s![:, 1:2])
-    // dw = box_deltas.slice(s![:, 2:3])
-    // dh = box_deltas.slice(s![:, 3:4])
+//     boxes = boxes * scale_bboxes;
 
-    // pred_ctr_x = dx * widths[:, np.newaxis] + ctr_x[:, np.newaxis]
-    // pred_ctr_y = dy * heights[:, np.newaxis] + ctr_y[:, np.newaxis]
-    // pred_w = np.exp(dw) * widths[:, np.newaxis]
-    // pred_h = np.exp(dh) * heights[:, np.newaxis]
+//     let mut scores = confidences.slice(s![0, .., 1]).to_owned();
 
-    // pred_boxes = np.zeros(box_deltas.shape)
-    // // # x1
-    // pred_boxes[:, 0:1] = pred_ctr_x - 0.5 * (pred_w - 1.0)
-    // // # y1
-    // pred_boxes[:, 1:2] = pred_ctr_y - 0.5 * (pred_h - 1.0)
-    // // # x2
-    // pred_boxes[:, 2:3] = pred_ctr_x + 0.5 * (pred_w - 1.0)
-    // // # y2
-    // pred_boxes[:, 3:4] = pred_ctr_y + 0.5 * (pred_h - 1.0)
+//     let mut landmarks = decode_landmark(
+//         landmarks.slice(s![0, .., ..]).to_owned(),
+//         prior_box.clone(),
+//         variance,
+//     );
+//     landmarks = landmarks * scale_landmarks;
 
-    // if box_deltas.shape[1] > 4:
-    //     pred_boxes[:, 4:] = box_deltas[:, 4:]
+//     let valid_index = scores
+//         .iter()
+//         .enumerate()
+//         .filter(|(_, val)| val > &&confidence_threshold)
+//         .map(|(order, _)| order)
+//         .collect::<Vec<_>>();
 
-    let mut boxes = ndarray::concatenate(
-        Axis(1),
-        &[
-            (priors.slice(s![.., ..2]).to_owned()
-                + loc.slice(s![.., ..2]).mul(variances[0]) * priors.slice(s![.., 2..]))
-            .view(),
-            (priors.slice(s![.., 2..]).to_owned()
-                * loc
-                    .slice(s![.., 2..])
-                    .mul(variances[1])
-                    .to_owned()
-                    .mapv(f32::exp))
-            .view(),
-        ],
-    )
-    .unwrap();
+//     boxes = boxes.select(Axis(0), &valid_index);
+//     landmarks = landmarks.select(Axis(0), &valid_index);
+//     scores = scores.select(Axis(0), &valid_index);
 
-    let boxes_sub = boxes.slice(s![.., ..2]).to_owned() - boxes.slice(s![.., 2..]).div(2.0);
-    boxes.slice_mut(s![.., ..2]).assign(&boxes_sub);
+//     let keep = nms(
+//         &boxes,
+//         &scores.mapv(|x| x as f64),
+//         nms_threshold,
+//         confidence_threshold as f64,
+//     );
 
-    let boxes_add = boxes.slice(s![.., 2..]).to_owned() + boxes.slice(s![.., ..2]);
-    boxes.slice_mut(s![.., 2..]).assign(&boxes_add);
-    boxes
-}
+//     let mut faces = vec![];
 
-fn decode_landmark(pre: Array2<f32>, priors: Array2<f32>, variances: [f32; 2]) -> Array2<f32> {
-    ndarray::concatenate(
-        Axis(1),
-        &[
-            (priors.slice(s![.., ..2]).to_owned()
-                + pre.slice(s![.., ..2]).mapv(|x| x * variances[0]) * priors.slice(s![.., 2..]))
-            .view(),
-            (priors.slice(s![.., ..2]).to_owned()
-                + pre.slice(s![.., 2..4]).mapv(|x| x * variances[0]) * priors.slice(s![.., 2..]))
-            .view(),
-            (priors.slice(s![.., ..2]).to_owned()
-                + pre.slice(s![.., 4..6]).mapv(|x| x * variances[0]) * priors.slice(s![.., 2..]))
-            .view(),
-            (priors.slice(s![.., ..2]).to_owned()
-                + pre.slice(s![.., 6..8]).mapv(|x| x * variances[0]) * priors.slice(s![.., 2..]))
-            .view(),
-            (priors.slice(s![.., ..2]).to_owned()
-                + pre.slice(s![.., 8..10]).mapv(|x| x * variances[0]) * priors.slice(s![.., 2..]))
-            .view(),
-        ],
-    )
-    .unwrap()
-}
+//     for index in keep {
+//         let bbox = boxes.slice(s![index, ..]);
+//         let landmark = landmarks.slice(s![index, ..]);
+//         faces.push((
+//             scores[index],
+//             [bbox[0], bbox[1], bbox[2], bbox[3]],
+//             [
+//                 (landmark[0], landmark[1]),
+//                 (landmark[2], landmark[3]),
+//                 (landmark[4], landmark[5]),
+//                 (landmark[6], landmark[7]),
+//                 (landmark[8], landmark[9]),
+//             ],
+//         ));
+//     }
 
-pub fn infer(
-    landmarks: ArrayView3<f32>,
-    confidences: ArrayView3<f32>,
-    locations: ArrayView3<f32>,
-    image_size: [usize; 2],
-) -> Result<Vec<(f32, [f32; 4], [(f32, f32); 5])>, Error> {
-    let confidence_threshold = 0.27016;
-    let nms_threshold = 0.2;
-    let variance = [0.1, 0.2];
-
-    let transformed_size = ndarray::Array::from_iter(image_size).into_owned();
-
-    let (prior_box, _) = prior_box(
-        [[16, 32], [64, 128], [256, 512]],
-        STRIDES,
-        false,
-        [image_size[0], image_size[1]],
-    );
-
-    let scale_landmarks = ndarray::concatenate(Axis(0), &[transformed_size.view(); 5])
-        .unwrap()
-        .mapv(|x| x as f32);
-
-    let scale_bboxes = ndarray::concatenate(Axis(0), &[transformed_size.view(); 2])
-        .unwrap()
-        .mapv(|x| x as f32);
-
-    let confidence_exp = confidences.map(|v| v.exp());
-    let confidences = &confidence_exp / confidence_exp.sum_axis(Axis(2)).insert_axis(Axis(2));
-
-    let mut boxes = decode(locations.slice(s![0, .., ..]), prior_box.view(), variance);
-
-    boxes = boxes * scale_bboxes;
-
-    let mut scores = confidences.slice(s![0, .., 1]).to_owned();
-
-    let mut landmarks = decode_landmark(
-        landmarks.slice(s![0, .., ..]).to_owned(),
-        prior_box.clone(),
-        variance,
-    );
-    landmarks = landmarks * scale_landmarks;
-
-    let valid_index = scores
-        .iter()
-        .enumerate()
-        .filter(|(_, val)| val > &&confidence_threshold)
-        .map(|(order, _)| order)
-        .collect::<Vec<_>>();
-
-    boxes = boxes.select(Axis(0), &valid_index);
-    landmarks = landmarks.select(Axis(0), &valid_index);
-    scores = scores.select(Axis(0), &valid_index);
-
-    let keep = nms(
-        &boxes,
-        &scores.mapv(|x| x as f64),
-        nms_threshold,
-        confidence_threshold as f64,
-    );
-
-    let mut faces = vec![];
-
-    for index in keep {
-        let bbox = boxes.slice(s![index, ..]);
-        let landmark = landmarks.slice(s![index, ..]);
-        faces.push((
-            scores[index],
-            [bbox[0], bbox[1], bbox[2], bbox[3]],
-            [
-                (landmark[0], landmark[1]),
-                (landmark[2], landmark[3]),
-                (landmark[4], landmark[5]),
-                (landmark[6], landmark[7]),
-                (landmark[8], landmark[9]),
-            ],
-        ));
-    }
-
-    Ok(faces)
-}
+//     Ok(faces)
+// }
 
 pub fn nms<'a, N, BA, SA>(
     boxes: BA,
@@ -966,4 +734,330 @@ pub fn umeyama<const R: usize>(
     let m22 = m00x22.m22;
 
     nalgebra::Matrix3::<f32>::new(m11, m12, m13, m21, m22, m23, 0f32, 0f32, 1f32)
+}
+
+fn generate_anchors(base_size: i32, ratios: &[f32], scales: &[f32]) -> Array2<f32> {
+    let num_ratio = ratios.len();
+    let num_scale = scales.len();
+    let total = num_ratio * num_scale;
+
+    // 4 rows (x1,y1,x2,y2) and total columns (one anchor per column)
+    let mut anchors = Array2::<f32>::zeros((4, total));
+
+    let cx = base_size as f32 * 0.5_f32;
+    let cy = base_size as f32 * 0.5_f32;
+
+    for (i, &ar) in ratios.iter().enumerate() {
+        // compute r_w and r_h as in the C++ code
+        let r_w = ((base_size as f32) / ar.sqrt()).round();
+        let r_h = (r_w * ar).round();
+
+        for (j, &scale) in scales.iter().enumerate() {
+            let rs_w = r_w * scale;
+            let rs_h = r_h * scale;
+
+            let col = i * num_scale + j;
+            anchors[[0, col]] = cx - rs_w * 0.5_f32;
+            anchors[[1, col]] = cy - rs_h * 0.5_f32;
+            anchors[[2, col]] = cx + rs_w * 0.5_f32;
+            anchors[[3, col]] = cy + rs_h * 0.5_f32;
+        }
+    }
+
+    anchors
+}
+
+#[derive(Clone, Debug)]
+struct FaceObject {
+    rect: BoundingBox,
+    landmark: [Point2<f32>; 5],
+    prob: f32,
+}
+
+fn process1(
+    base_size: i32,
+    score_blob: &Array3<f32>,
+    bbox_blob: &Array3<f32>,
+    landmark_blob: &Array3<f32>,
+    prob_threshold: f32,
+) -> Vec<FaceObject> {
+    let mut faceproposals = Vec::<FaceObject>::new();
+
+    for (idx, stride) in STRIDES.into_iter().enumerate() {
+        let anchors = generate_anchors(base_size, &[1.0], &SCALES[idx]);
+
+        generate_proposals(
+            &anchors,
+            stride,
+            score_blob,
+            bbox_blob,
+            landmark_blob,
+            prob_threshold,
+            &mut faceproposals,
+        );
+    }
+
+    faceproposals
+}
+
+/// anchors: shape (4, num_anchors) where each column is [x0,y0,x1,y1]
+/// score_blob: shape (num_channels, h, w) - channel layout matches C++ usage
+/// bbox_blob: shape (num_channels, h, w)
+/// landmark_blob: shape (num_channels, h, w)
+pub fn generate_proposals(
+    anchors: &Array2<f32>,
+    feat_stride: u32,
+    score_blob: &Array3<f32>,
+    bbox_blob: &Array3<f32>,
+    landmark_blob: &Array3<f32>,
+    prob_threshold: f32,
+    faceobjects: &mut Vec<FaceObject>,
+) {
+    let w = score_blob.shape()[2];
+    let h = score_blob.shape()[1];
+
+    let num_anchors = anchors.shape()[1];
+
+    for q in 0..num_anchors {
+        // anchor column q
+        let anchor_x0 = anchors[[0, q]];
+        let anchor_y0 = anchors[[1, q]];
+
+        let anchor_x1 = anchors[[2, q]];
+        let anchor_y1 = anchors[[3, q]];
+
+        // score channel for this anchor in C++ is channel(q + num_anchors)
+        // bbox channels start at q*4, length 4
+        // landmark channels start at q*10, length 10
+        let score_channel_idx = q + num_anchors;
+        let bbox_channel_start = q * 4;
+        let landmark_channel_start = q * 10;
+
+        // bounds check (silently skip if shapes don't match expected layout)
+        if score_channel_idx >= score_blob.shape()[0] {
+            continue;
+        }
+
+        if bbox_channel_start + 3 >= bbox_blob.shape()[0] {
+            continue;
+        }
+
+        if landmark_channel_start + 9 >= landmark_blob.shape()[0] {
+            continue;
+        }
+
+        let mut anchor_y = anchor_y0;
+        let anchor_w = anchor_x1 - anchor_x0;
+        let anchor_h = anchor_y1 - anchor_y0;
+
+        for i in 0..h {
+            let mut anchor_x = anchor_x0;
+
+            for j in 0..w {
+                let prob = score_blob[[score_channel_idx, i, j]];
+
+                if prob >= prob_threshold {
+                    // bbox deltas
+                    let dx = bbox_blob[[bbox_channel_start + 0, i, j]];
+                    let dy = bbox_blob[[bbox_channel_start + 1, i, j]];
+                    let dw = bbox_blob[[bbox_channel_start + 2, i, j]];
+                    let dh = bbox_blob[[bbox_channel_start + 3, i, j]];
+
+                    let cx = anchor_x + anchor_w * 0.5_f32;
+                    let cy = anchor_y + anchor_h * 0.5_f32;
+
+                    let pb_cx = cx + anchor_w * dx;
+                    let pb_cy = cy + anchor_h * dy;
+
+                    let pb_w = anchor_w * (dw.exp());
+                    let pb_h = anchor_h * (dh.exp());
+
+                    let x0 = pb_cx - pb_w * 0.5_f32;
+                    let y0 = pb_cy - pb_h * 0.5_f32;
+
+                    let x1 = pb_cx + pb_w * 0.5_f32;
+                    let y1 = pb_cy + pb_h * 0.5_f32;
+
+                    // landmarks: 5 points, each has (x,y) stored in 10 channels
+                    let lm0_x = landmark_blob[[landmark_channel_start + 0, i, j]];
+                    let lm0_y = landmark_blob[[landmark_channel_start + 1, i, j]];
+                    let lm1_x = landmark_blob[[landmark_channel_start + 2, i, j]];
+                    let lm1_y = landmark_blob[[landmark_channel_start + 3, i, j]];
+                    let lm2_x = landmark_blob[[landmark_channel_start + 4, i, j]];
+                    let lm2_y = landmark_blob[[landmark_channel_start + 5, i, j]];
+                    let lm3_x = landmark_blob[[landmark_channel_start + 6, i, j]];
+                    let lm3_y = landmark_blob[[landmark_channel_start + 7, i, j]];
+                    let lm4_x = landmark_blob[[landmark_channel_start + 8, i, j]];
+                    let lm4_y = landmark_blob[[landmark_channel_start + 9, i, j]];
+
+                    faceobjects.push(FaceObject {
+                        rect: BoundingBox::new(x0, y0, x1, y1),
+                        landmark: [
+                            Point2::new(
+                                cx + (anchor_w + 1.0) * lm0_x,
+                                cy + (anchor_h + 1.0) * lm0_y,
+                            ),
+                            Point2::new(
+                                cx + (anchor_w + 1.0) * lm1_x,
+                                cy + (anchor_h + 1.0) * lm1_y,
+                            ),
+                            Point2::new(
+                                cx + (anchor_w + 1.0) * lm2_x,
+                                cy + (anchor_h + 1.0) * lm2_y,
+                            ),
+                            Point2::new(
+                                cx + (anchor_w + 1.0) * lm3_x,
+                                cy + (anchor_h + 1.0) * lm3_y,
+                            ),
+                            Point2::new(
+                                cx + (anchor_w + 1.0) * lm4_x,
+                                cy + (anchor_h + 1.0) * lm4_y,
+                            ),
+                        ],
+                        prob,
+                    });
+                }
+
+                anchor_x += feat_stride as f32;
+            }
+
+            anchor_y += feat_stride as f32;
+        }
+    }
+}
+
+//
+// -----
+//
+
+pub struct RetinaModelConfig {
+    name: String,
+    min_sizes: [[u32; 2]; 3],
+    steps: [u32; 3],
+}
+
+impl Default for RetinaModelConfig {
+    fn default() -> Self {
+        Self {
+            name: Default::default(),
+            min_sizes: PRIORS,
+            steps: STRIDES,
+        }
+    }
+}
+
+fn prior_box(min_sizes: &[[u32; 2]], steps: &[u32], image_size: [u32; 2]) -> ndarray::Array2<f32> {
+    let feature_maps = steps.iter().copied().map(|step| {
+        [
+            f32::ceil(image_size[0] as f32 / step as f32) as i32,
+            f32::ceil(image_size[1] as f32 / step as f32) as i32,
+        ]
+    });
+
+    let mut anchors: Vec<[f32; 4]> = vec![];
+    for (k, f) in feature_maps.enumerate() {
+        for (i, j) in Itertools::cartesian_product(0..f[0], 0..f[1]) {
+            for min_size in min_sizes[k] {
+                anchors.push([
+                    (i as f32 + 0.5) * steps[k] as f32 / image_size[1] as f32,
+                    (j as f32 + 0.5) * steps[k] as f32 / image_size[0] as f32,
+                    min_size as f32 / image_size[0] as f32,
+                    min_size as f32 / image_size[1] as f32,
+                ]);
+            }
+        }
+    }
+
+    ndarray::arr2(&anchors).clamp(0.0, 1.0)
+}
+
+fn process(
+    score_blob: &Array2<f32>,
+    bbox_blob: &Array2<f32>,
+    landmark_blob: &Array2<f32>,
+    prob_threshold: f32,
+    image_size: [u32; 2],
+) -> Vec<FaceObject> {
+    let min_sizes = PRIORS;
+    let steps = STRIDES;
+
+    let mut faceproposals = Vec::<FaceObject>::new();
+    let anchors = prior_box(&min_sizes, &steps, image_size);
+
+    decode(
+        &mut faceproposals,
+        score_blob,
+        bbox_blob,
+        landmark_blob,
+        &anchors,
+        [0.1, 0.2],
+        prob_threshold,
+    );
+
+    faceproposals
+}
+
+fn decode(
+    dst: &mut Vec<FaceObject>,
+    probs: &Array2<f32>,
+    bboxes: &Array2<f32>,
+    landmarks: &Array2<f32>,
+    priors: &Array2<f32>,
+    variances: [f32; 2],
+    threshold: f32,
+) {
+    let count = landmarks.shape()[0];
+    dst.reserve(count);
+
+    for i in 0..count {
+        // confidence
+        let prob = probs[[i, 0]];
+
+        if prob < threshold {
+            continue;
+        }
+
+        // priors
+        let px = priors[[i, 0]];
+        let py = priors[[i, 1]];
+        let pw = priors[[i, 2]];
+        let ph = priors[[i, 3]];
+        let pw_var0 = pw * variances[0];
+        let ph_var0 = ph * variances[0];
+
+        // bboxes: each has (x,y,dw,dh) stored in 4 channels
+        let dx = bboxes[[i, 0]];
+        let dy = bboxes[[i, 1]];
+        let dw = bboxes[[i, 2]];
+        let dh = bboxes[[i, 3]];
+
+        let cx = px + pw_var0 * dx;
+        let cy = py + ph_var0 * dy;
+        let w = pw * (variances[1] * dw).exp();
+        let h = ph * (variances[1] * dh).exp();
+
+        // landmarks: 5 points, each has (x,y) stored in 10 channels
+        let lm0_x = landmarks[[i, 0]];
+        let lm0_y = landmarks[[i, 1]];
+        let lm1_x = landmarks[[i, 2]];
+        let lm1_y = landmarks[[i, 3]];
+        let lm2_x = landmarks[[i, 4]];
+        let lm2_y = landmarks[[i, 5]];
+        let lm3_x = landmarks[[i, 6]];
+        let lm3_y = landmarks[[i, 7]];
+        let lm4_x = landmarks[[i, 8]];
+        let lm4_y = landmarks[[i, 9]];
+
+        dst.push(FaceObject {
+            prob,
+            rect: BoundingBox::new2(cx - w * 0.5, cy - h * 0.5, w, h),
+            landmark: [
+                Point2::new(px + pw_var0 * lm0_x, py + ph_var0 * lm0_y),
+                Point2::new(px + pw_var0 * lm1_x, py + ph_var0 * lm1_y),
+                Point2::new(px + pw_var0 * lm2_x, py + ph_var0 * lm2_y),
+                Point2::new(px + pw_var0 * lm3_x, py + ph_var0 * lm3_y),
+                Point2::new(px + pw_var0 * lm4_x, py + ph_var0 * lm4_y),
+            ],
+        });
+    }
 }

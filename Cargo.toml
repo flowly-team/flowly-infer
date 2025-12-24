@@ -4,6 +4,8 @@ version = "0.0.1"
 edition = "2024"
 
 [dependencies]
+flowly-cv = { path = "../flowly-cv" }
+flowly-cv-nvidia = { path = "../flowly-cv-nvidia" }
 async-cuda = { version = "0.6.1", git = "https://github.com/andreytkachenko/async-cuda.git", features = ["ndarray"] }
 async-stream = "0.3.6"
 async-tensorrt = { version = "0.9.1", git = "https://github.com/andreytkachenko/async-tensorrt.git" }

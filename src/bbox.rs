@@ -15,6 +15,15 @@ impl BoundingBox {
         Self { x1, y1, x2, y2 }
     }
 
+    pub fn new2(left: f32, top: f32, width: f32, height: f32) -> BoundingBox {
+        Self {
+            x1: left,
+            y1: top,
+            x2: left + width,
+            y2: top + height,
+        }
+    }
+
     #[inline]
     pub fn area(&self) -> f32 {
         self.width() * self.height()
